@@ -8,7 +8,7 @@ InModuleScope 'ExportEXOProvider' {
             BeforeAll {
                 Mock -CommandName Invoke-RobustDnsTxt {
                     @{
-                        "Answers" = @("v=DMARC1...");
+                        "Answers" = @("v=DMARC1; p=reject;");
                         "Errors" = @();
                         "NXDomain" = $false;
                         "LogEntries" = @("some text")
@@ -24,7 +24,7 @@ InModuleScope 'ExportEXOProvider' {
                     }
                 ) -PreferredDnsResolvers @() -SkipDoH $false
                 Should -Invoke -CommandName Invoke-RobustDnsTxt -Exactly -Times 1
-                $Response.rdata -Contains "v=DMARC1..." | Should -Be $true
+                $Response.rdata -Contains "v=DMARC1; p=reject;" | Should -Be $true
             }
 
             It "Resolves multiple domain names" {
@@ -40,7 +40,7 @@ InModuleScope 'ExportEXOProvider' {
                     }
                 ) -PreferredDnsResolvers @() -SkipDoH $false
                 Should -Invoke -CommandName Invoke-RobustDnsTxt -Exactly -Times 2
-                $Response.rdata -Contains "v=DMARC1..." | Should -Be $true
+                $Response.rdata -Contains "v=DMARC1; p=reject;" | Should -Be $true
             }
 
             It "Ignores the coexistence domain" {
@@ -57,7 +57,7 @@ InModuleScope 'ExportEXOProvider' {
                     }
                 ) -PreferredDnsResolvers @() -SkipDoH $false
                 Should -Invoke -CommandName Invoke-RobustDnsTxt -Exactly -Times 1
-                $Response.rdata -Contains "v=DMARC1..." | Should -Be $true
+                $Response.rdata -Contains "v=DMARC1; p=reject;" | Should -Be $true
             }
         }
 
@@ -69,7 +69,7 @@ InModuleScope 'ExportEXOProvider' {
                     $script:DmarcQueries += $Qname
                     if ($Qname -eq $script:DmarcAnswerName) {
                         @{
-                            "Answers" = @("v=DMARC1...");
+                            "Answers" = @("v=DMARC1; p=reject;");
                             "Errors" = @();
                             "NXDomain" = $false;
                             "LogEntries" = @("some text")
@@ -91,7 +91,7 @@ InModuleScope 'ExportEXOProvider' {
                 $Response = Get-ScubaDmarcRecord -Domains @(@{"DomainName" = "a.b.example.com"}) `
                     -PreferredDnsResolvers @() -SkipDoH $false
                 Should -Invoke -CommandName Invoke-RobustDnsTxt -Exactly -Times 4
-                $Response.rdata -Contains "v=DMARC1..." | Should -Be $true
+                $Response.rdata -Contains "v=DMARC1; p=reject;" | Should -Be $true
                 $script:DmarcQueries | Should -Be @(
                     "_dmarc.a.b.example.com",
                     "_dmarc.b.example.com",
@@ -105,7 +105,7 @@ InModuleScope 'ExportEXOProvider' {
 
                 $Response = Get-ScubaDmarcRecord -Domains @(@{"DomainName" = "subdomain.example.fed.us"}) `
                     -PreferredDnsResolvers @() -SkipDoH $false
-                $Response.rdata -Contains "v=DMARC1..." | Should -Be $true
+                $Response.rdata -Contains "v=DMARC1; p=reject;" | Should -Be $true
                 $script:DmarcQueries | Should -Contain "_dmarc.example.fed.us"
             }
 
@@ -153,6 +153,78 @@ InModuleScope 'ExportEXOProvider' {
                         }
                     }
                 }
+            }
+
+            It "Discards malformed version <Version> at the author domain and starts the tree walk" -TestCases @(
+                @{ Version = "DMARC10" },
+                @{ Version = "DMARC1x" },
+                @{ Version = "DMARC1..." }
+            ) {
+                param($Version)
+                $script:DmarcAnswersByName["_dmarc.a.b.example.com"] = "v=$Version; p=none;"
+                $script:DmarcAnswersByName["_dmarc.example.com"] = "v=DMARC1; p=reject;"
+
+                $Response = Get-ScubaDmarcRecord -Domains @(@{"DomainName" = "a.b.example.com"}) `
+                    -PreferredDnsResolvers @() -SkipDoH $false
+
+                $Response.rdata | Should -Be @("v=DMARC1; p=reject;")
+                $script:DmarcQueries | Should -Be @(
+                    "_dmarc.a.b.example.com",
+                    "_dmarc.b.example.com",
+                    "_dmarc.example.com",
+                    "_dmarc.com"
+                )
+            }
+
+            It "Discards malformed version <Version> with a PSD boundary during the tree walk" -TestCases @(
+                @{ Version = "DMARC10" },
+                @{ Version = "DMARC1x" },
+                @{ Version = "DMARC1..." }
+            ) {
+                param($Version)
+                $script:DmarcAnswersByName["_dmarc.b.example.com"] = "v=$Version; p=none; psd=y;"
+                $script:DmarcAnswersByName["_dmarc.example.com"] = "v=DMARC1; p=reject;"
+
+                $Response = Get-ScubaDmarcRecord -Domains @(@{"DomainName" = "a.b.example.com"}) `
+                    -PreferredDnsResolvers @() -SkipDoH $false
+
+                $Response.rdata | Should -Be @("v=DMARC1; p=reject;")
+                $script:DmarcQueries | Should -Be @(
+                    "_dmarc.a.b.example.com",
+                    "_dmarc.b.example.com",
+                    "_dmarc.example.com",
+                    "_dmarc.com"
+                )
+            }
+
+            It "Does not count a malformed version as a second policy at <Target>" -TestCases @(
+                @{ Target = "_dmarc.a.b.example.com" },
+                @{ Target = "_dmarc.b.example.com" }
+            ) {
+                param($Target)
+                $script:DmarcAnswersByName[$Target] = @("v=DMARC1; p=reject; psd=n;", "v=DMARC10; p=none;")
+
+                $Response = Get-ScubaDmarcRecord -Domains @(@{"DomainName" = "a.b.example.com"}) `
+                    -PreferredDnsResolvers @() -SkipDoH $false
+
+                $Response.rdata | Should -Be @("v=DMARC1; p=reject; psd=n;")
+                $script:DmarcQueries[-1] | Should -Be $Target
+            }
+
+            It "Accepts an exact version tag followed by <Ending>" -TestCases @(
+                @{ Ending = "a delimiter"; Record = "v=DMARC1; p=reject;" },
+                @{ Ending = "whitespace and a delimiter"; Record = "v=DMARC1 `t; p=reject;" },
+                @{ Ending = "the end of the value"; Record = "v=DMARC1" },
+                @{ Ending = "trailing whitespace"; Record = "v=DMARC1 `t" }
+            ) {
+                param($Record)
+                $script:DmarcAnswersByName["_dmarc.a.b.example.com"] = $Record
+
+                $Response = Get-ScubaDmarcRecord -Domains @(@{"DomainName" = "a.b.example.com"}) `
+                    -PreferredDnsResolvers @() -SkipDoH $false
+
+                $Response.rdata | Should -Be @($Record)
+                $script:DmarcQueries | Should -Be @("_dmarc.a.b.example.com")
             }
 
             It "Stops the walk early when a valid record carries psd=y" {

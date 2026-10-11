@@ -675,7 +675,7 @@ function Get-ScubaDmarcRecord {
         # RFC 9989 step 2 applies to the starting target as well as every
         # subsequent tree-walk target. Do not let unrelated TXT records or an
         # ambiguous set of DMARC records suppress parent-domain discovery.
-        $ValidAnswers = @($Response.Answers | Where-Object { $_ -match '^v=DMARC1' })
+        $ValidAnswers = @($Response.Answers | Where-Object { $_ -match '^v=DMARC1[ \t]*(?:;|$)' })
 
         if ($ValidAnswers.Length -eq 1) {
             $Response = [PSCustomObject]@{
@@ -725,7 +725,7 @@ function Get-ScubaDmarcRecord {
                 # there, same as zero answers. A single valid record carrying the psd
                 # tag marks the walk boundary explicitly, so stop there instead of
                 # continuing unconditionally through the remaining labels.
-                $ValidAnswers = @($CandidateResponse.Answers | Where-Object { $_ -match '^v=DMARC1' })
+                $ValidAnswers = @($CandidateResponse.Answers | Where-Object { $_ -match '^v=DMARC1[ \t]*(?:;|$)' })
 
                 if ($ValidAnswers.Length -eq 1) {
                     $ValidatedResponse = [PSCustomObject]@{
